@@ -235,10 +235,15 @@ class MainActivity : ComponentActivity() {
                 val errorDetails =
                     "${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}"
 
+                // Keep the actual error visible on screen.
                 status.value = "AI ERROR: $errorDetails"
 
-                speakAnswer(
-                    "Sorry, there was a problem connecting to the AI service."
+                // Speak the error without changing the status.
+                textToSpeech?.speak(
+                    "There was a problem connecting to the AI service.",
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "JARVIS_ERROR"
                 )
             }
         }
