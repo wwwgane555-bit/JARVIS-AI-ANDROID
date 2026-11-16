@@ -9,6 +9,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,11 +71,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        Firebase.initialize(context = this)
+        try {
+            Firebase.initialize(context = this)
 
-        Firebase.appCheck.installAppCheckProviderFactory(
-            DebugAppCheckProviderFactory.getInstance()
-        )
+            Firebase.appCheck.installAppCheckProviderFactory(
+                DebugAppCheckProviderFactory.getInstance()
+            )
+        } catch (e: Exception) {
+            Log.e("JARVIS_FIREBASE_INIT", "Firebase initialization failed", e)
+            status.value = "FIREBASE INIT ERROR: ${e.message}"
+        }
 
         textToSpeech = TextToSpeech(this) { result ->
             if (result == TextToSpeech.SUCCESS) {
@@ -122,9 +128,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    override fun onPartialResults(
-                        partialResults: Bundle?
-                    ) {}
+                    override fun onPartialResults(partialResults: Bundle?) {}
 
                     override fun onEvent(
                         eventType: Int,
@@ -182,7 +186,8 @@ class MainActivity : ComponentActivity() {
             speechRecognizer?.startListening(intent)
 
         } catch (e: Exception) {
-            status.value = "MICROPHONE ERROR"
+            Log.e("JARVIS_SPEECH", "Speech error", e)
+            status.value = "MICROPHONE ERROR: ${e.message}"
         }
     }
 
@@ -225,9 +230,15 @@ class MainActivity : ComponentActivity() {
                 speakAnswer(answer)
 
             } catch (e: Exception) {
-                status.value = "AI CONNECTION ERROR"
+                Log.e("JARVIS_AI_ERROR", "AI request failed", e)
+
+                val errorDetails =
+                    "${e.javaClass.simpleName}: ${e.message ?: "Unknown error"}"
+
+                status.value = "AI ERROR: $errorDetails"
+
                 speakAnswer(
-                    "Sorry, I could not connect to the AI service. Please try again."
+                    "Sorry, there was a problem connecting to the AI service."
                 )
             }
         }
