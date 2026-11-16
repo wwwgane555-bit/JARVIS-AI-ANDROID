@@ -11,19 +11,23 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.core.app.ActivityCompat
-import androidx.lifecycle.lifecycleScope
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -44,6 +48,9 @@ class MainActivity : ComponentActivity() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var textToSpeech: TextToSpeech? = null
 
+    private lateinit var microphonePermissionLauncher:
+        ActivityResultLauncher<String>
+
     private val status = mutableStateOf("JARVIS ONLINE")
     private val conversationHistory = mutableListOf<String>()
 
@@ -56,22 +63,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Firebase initialization
+        microphonePermissionLauncher =
+            registerForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    startListening()
+                } else {
+                    status.value = "MICROPHONE PERMISSION NEEDED"
+                }
+            }
+
         Firebase.initialize(context = this)
 
-        // App Check debug provider for development
         Firebase.appCheck.installAppCheckProviderFactory(
             DebugAppCheckProviderFactory.getInstance()
         )
 
-        // Text to Speech
         textToSpeech = TextToSpeech(this) { result ->
             if (result == TextToSpeech.SUCCESS) {
                 textToSpeech?.setSpeechRate(0.92f)
             }
         }
 
-        // Speech recognition
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
             speechRecognizer =
                 SpeechRecognizer.createSpeechRecognizer(this)
@@ -141,15 +155,11 @@ class MainActivity : ComponentActivity() {
         }
 
         if (
-            ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
         ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                101
+            microphonePermissionLauncher.launch(
+                Manifest.permission.RECORD_AUDIO
             )
             return
         }
@@ -258,28 +268,6 @@ class MainActivity : ComponentActivity() {
         status.value = "JARVIS ONLINE"
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        )
-
-        if (
-            requestCode == 101 &&
-            grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
-        ) {
-            startListening()
-        } else if (requestCode == 101) {
-            status.value = "MICROPHONE PERMISSION NEEDED"
-        }
-    }
-
     override fun onDestroy() {
         speechRecognizer?.destroy()
         textToSpeech?.stop()
@@ -299,11 +287,9 @@ fun JarvisScreen(
     val pulse by infiniteTransition.animateFloat(
         initialValue = 0.88f,
         targetValue = 1.08f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(
-                durationMillis = 1400
-            ),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400),
+            repeatMode = RepeatMode.Reverse
         ),
         label = "pulse"
     )
@@ -311,10 +297,8 @@ fun JarvisScreen(
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(
-                durationMillis = 8000
-            )
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 8000)
         ),
         label = "rotation"
     )
@@ -358,7 +342,6 @@ fun JarvisScreen(
                 val center = this.center
                 val baseRadius = size.minDimension * 0.29f
 
-                // Outer glow rings
                 drawCircle(
                     color = Color(0xFF0077FF).copy(alpha = 0.10f),
                     radius = baseRadius * 1.65f * pulse,
@@ -372,7 +355,6 @@ fun JarvisScreen(
                     style = Stroke(width = 3.dp.toPx())
                 )
 
-                // Rotating ring
                 rotate(rotation, pivot = center) {
                     drawCircle(
                         color = Color(0xFF48D7FF),
@@ -382,7 +364,7 @@ fun JarvisScreen(
                     )
                 }
 
-                rotate(-rotation * 0.7f, pivot = center) {
+                rotate(rotation * -0.7f, pivot = center) {
                     drawCircle(
                         color = Color(0xFF168BFF),
                         radius = baseRadius * 1.02f,
@@ -391,7 +373,6 @@ fun JarvisScreen(
                     )
                 }
 
-                // Core
                 drawCircle(
                     color = Color(0xFF007BFF).copy(alpha = 0.35f),
                     radius = baseRadius * pulse,
