@@ -18,7 +18,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,14 +34,37 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.google.firebase.Firebase
+import com.google.firebase.ai.GenerativeBackend
+import com.google.firebase.ai.ai
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.statusBarColor = android.graphics.Color.rgb(2, 8, 20)
-        window.navigationBarColor = android.graphics.Color.rgb(2, 8, 20)
+        window.statusBarColor =
+            android.graphics.Color.rgb(2, 8, 20)
+
+        window.navigationBarColor =
+            android.graphics.Color.rgb(2, 8, 20)
+
+        try {
+            Firebase.initialize(context = this)
+
+            Firebase.appCheck.installAppCheckProviderFactory(
+                DebugAppCheckProviderFactory.getInstance()
+            )
+        } catch (e: Exception) {
+            android.util.Log.e(
+                "JARVIS",
+                "Firebase initialization error",
+                e
+            )
+        }
 
         setContent {
             JarvisScreen()
@@ -54,10 +76,15 @@ class MainActivity : ComponentActivity() {
 fun JarvisScreen() {
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var status by remember { mutableStateOf("JARVIS ONLINE") }
-    var spokenText by remember { mutableStateOf("Tap the orb and speak") }
-    var permissionGranted by remember { mutableStateOf(false) }
+    var status by remember {
+        mutableStateOf("JARVIS ONLINE")
+    }
+
+    var spokenText by remember {
+        mutableStateOf("Tap the energy core and speak")
+    }
 
     var recognizer by remember {
         mutableStateOf<SpeechRecognizer?>(null)
@@ -67,34 +94,176 @@ fun JarvisScreen() {
         mutableStateOf<TextToSpeech?>(null)
     }
 
+    var isThinking by remember {
+        mutableStateOf(false)
+    }
+
+    val conversation = remember {
+        mutableStateListOf<String>()
+    }
+
     val cyan = Color(0xFF00E5FF)
 
-    val pulse = rememberInfiniteTransition(label = "pulse")
-        .animateFloat(
-            initialValue = 0.94f,
-            targetValue = 1.06f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1200),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "orbPulse"
+    // Gemini model
+    val model = remember {
+        Firebase.ai(
+            backend = GenerativeBackend.googleAI()
+        ).generativeModel("gemini-3.8-flash")
+    }
+
+    // Orb pulse animation
+    val pulse = rememberInfiniteTransition(
+        label = "pulse"
+    ).animateFloat(
+        initialValue = 0.94f,
+        targetValue = 1.06f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "orbPulse"
+    )
+
+    // Orb rotation animation
+    val rotation = rememberInfiniteTransition(
+        label = "rotation"
+    ).animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                7000,
+                easing = LinearEasing
+            )
+        ),
+        label = "orbRotation"
+    )
+
+    // Speak AI response
+    fun speakReply(reply: String) {
+
+        val tamil = reply.any {
+            it in '\u0B80'..'\u0BFF'
+        }
+
+        val language = if (tamil) {
+            Locale("ta", "IN")
+        } else {
+            Locale("en", "IN")
+        }
+
+        tts?.setLanguage(language)
+        tts?.setSpeechRate(0.92f)
+        tts?.setPitch(1.0f)
+
+        tts?.speak(
+            reply,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "JARVIS_AI_REPLY"
         )
 
-    val rotation = rememberInfiniteTransition(label = "rotation")
-        .animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(7000, easing = LinearEasing)
-            ),
-            label = "orbRotation"
-        )
+        status = "SPEAKING..."
+    }
+
+    // Send question to Gemini
+    fun askJarvis(question: String) {
+
+        if (isThinking) return
+
+        isThinking = true
+        status = "THINKING..."
+        spokenText = question
+
+        scope.launch {
+
+            try {
+
+                val previousConversation =
+                    conversation.takeLast(10)
+                        .joinToString("\n")
+
+                val prompt = """
+                    You are JARVIS, a helpful personal AI assistant.
+
+                    Your job:
+                    - Answer questions clearly and accurately.
+                    - Support Tamil, Tanglish and English.
+                    - Reply in the same language style as the user.
+                    - Explain science, technology, coding and general knowledge simply.
+                    - Give step-by-step explanations when useful.
+                    - Remember the recent conversation included below.
+                    - Never invent facts.
+                    - If you are uncertain, say so.
+                    - Do not claim to have performed an action you did not perform.
+                    - Keep spoken replies reasonably concise.
+
+                    Recent conversation:
+                    $previousConversation
+
+                    User question:
+                    $question
+
+                    JARVIS answer:
+                """.trimIndent()
+
+                val response = model.generateContent(prompt)
+
+                val answer = response.text?.trim()
+
+                if (!answer.isNullOrBlank()) {
+
+                    conversation.add("User: $question")
+                    conversation.add("JARVIS: $answer")
+
+                    if (conversation.size > 20) {
+                        conversation.removeRange(
+                            0,
+                            conversation.size - 20
+                        )
+                    }
+
+                    spokenText = answer
+                    speakReply(answer)
+
+                } else {
+
+                    spokenText =
+                        "I could not get a response. Please try again."
+
+                    status = "NO AI RESPONSE"
+                }
+
+            } catch (e: Exception) {
+
+                android.util.Log.e(
+                    "JARVIS",
+                    "Gemini request failed",
+                    e
+                )
+
+                spokenText =
+                    "AI connection failed. Please check internet and Firebase setup."
+
+                status = "AI CONNECTION ERROR"
+
+                speakReply(
+                    "இப்போது AI இணைப்பில் சிக்கல் உள்ளது. இணையம் மற்றும் Firebase அமைப்பைச் சரிபார்க்கவும்."
+                )
+
+            } finally {
+
+                isThinking = false
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
 
         if (SpeechRecognizer.isRecognitionAvailable(context)) {
 
-            recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            recognizer =
+                SpeechRecognizer.createSpeechRecognizer(context)
 
             recognizer?.setRecognitionListener(
                 object : RecognitionListener {
@@ -116,6 +285,7 @@ fun JarvisScreen() {
                     }
 
                     override fun onError(error: Int) {
+
                         status = when (error) {
                             SpeechRecognizer.ERROR_NO_MATCH ->
                                 "VOICE NOT CLEAR"
@@ -126,31 +296,22 @@ fun JarvisScreen() {
                             SpeechRecognizer.ERROR_NETWORK ->
                                 "NETWORK ERROR"
 
-                            else -> "VOICE ERROR: $error"
+                            else ->
+                                "VOICE ERROR: $error"
                         }
                     }
 
                     override fun onResults(results: Bundle?) {
 
-                        val matches = results?.getStringArrayList(
-                            SpeechRecognizer.RESULTS_RECOGNITION
-                        )
+                        val matches =
+                            results?.getStringArrayList(
+                                SpeechRecognizer.RESULTS_RECOGNITION
+                            )
 
                         val result = matches?.firstOrNull()
 
                         if (!result.isNullOrBlank()) {
-
-                            spokenText = result
-                            status = "SPEAKING..."
-
-                            val reply = "You said: $result"
-
-                            tts?.speak(
-                                reply,
-                                TextToSpeech.QUEUE_FLUSH,
-                                null,
-                                "JARVIS_REPLY"
-                            )
+                            askJarvis(result)
                         } else {
                             status = "NO VOICE DETECTED"
                         }
@@ -183,7 +344,9 @@ fun JarvisScreen() {
                     tamilResult == TextToSpeech.LANG_MISSING_DATA ||
                     tamilResult == TextToSpeech.LANG_NOT_SUPPORTED
                 ) {
-                    tts?.language = Locale("en", "IN")
+                    tts?.setLanguage(
+                        Locale("en", "IN")
+                    )
                 }
 
                 tts?.setSpeechRate(0.92f)
@@ -192,6 +355,7 @@ fun JarvisScreen() {
         }
 
         onDispose {
+
             recognizer?.destroy()
             recognizer = null
 
@@ -206,8 +370,6 @@ fun JarvisScreen() {
             ActivityResultContracts.RequestPermission()
         ) { granted ->
 
-            permissionGranted = granted
-
             if (granted) {
                 startListening(recognizer)
             } else {
@@ -217,13 +379,14 @@ fun JarvisScreen() {
 
     fun onOrbTap() {
 
+        if (isThinking) return
+
         val granted = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
 
         if (granted) {
-            permissionGranted = true
             startListening(recognizer)
         } else {
             permissionLauncher.launch(
@@ -232,6 +395,7 @@ fun JarvisScreen() {
         }
     }
 
+    // Iron Man interface
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -258,16 +422,22 @@ fun JarvisScreen() {
                 letterSpacing = 5.sp
             )
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(
+                modifier = Modifier.height(30.dp)
+            )
 
             Canvas(
                 modifier = Modifier
                     .size(290.dp)
-                    .clickable { onOrbTap() }
+                    .clickable {
+                        onOrbTap()
+                    }
             ) {
 
                 val centerPoint = center
-                val radius = size.minDimension * 0.29f * pulse.value
+
+                val radius =
+                    size.minDimension * 0.29f * pulse.value
 
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -302,10 +472,15 @@ fun JarvisScreen() {
                     color = cyan,
                     radius = radius * 1.12f,
                     center = centerPoint,
-                    style = Stroke(width = 3.dp.toPx())
+                    style = Stroke(
+                        width = 3.dp.toPx()
+                    )
                 )
 
-                rotate(rotation.value, pivot = centerPoint) {
+                rotate(
+                    rotation.value,
+                    pivot = centerPoint
+                ) {
 
                     drawArc(
                         color = Color.White,
@@ -352,7 +527,9 @@ fun JarvisScreen() {
                 )
             }
 
-            Spacer(modifier = Modifier.height(25.dp))
+            Spacer(
+                modifier = Modifier.height(25.dp)
+            )
 
             Text(
                 "J.A.R.V.I.S",
@@ -362,7 +539,9 @@ fun JarvisScreen() {
                 letterSpacing = 6.sp
             )
 
-            Spacer(modifier = Modifier.height(15.dp))
+            Spacer(
+                modifier = Modifier.height(15.dp)
+            )
 
             Text(
                 status,
@@ -371,20 +550,30 @@ fun JarvisScreen() {
                 letterSpacing = 2.sp
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(
+                modifier = Modifier.height(20.dp)
+            )
 
             Text(
                 spokenText,
                 color = Color.White,
                 fontSize = 15.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 25.dp)
+                modifier = Modifier.padding(
+                    horizontal = 25.dp
+                )
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(
+                modifier = Modifier.height(20.dp)
+            )
 
             Text(
-                "TAP THE ENERGY CORE TO SPEAK",
+                if (isThinking) {
+                    "JARVIS IS PROCESSING"
+                } else {
+                    "TAP THE ENERGY CORE TO SPEAK"
+                },
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = 10.sp,
                 letterSpacing = 2.sp
@@ -396,6 +585,7 @@ fun JarvisScreen() {
 private fun startListening(
     recognizer: SpeechRecognizer?
 ) {
+
     if (recognizer == null) return
 
     val intent = Intent(
@@ -405,16 +595,6 @@ private fun startListening(
         putExtra(
             RecognizerIntent.EXTRA_LANGUAGE_MODEL,
             RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-        )
-
-        putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE,
-            "ta-IN"
-        )
-
-        putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
-            "ta-IN"
         )
 
         putExtra(
@@ -429,8 +609,14 @@ private fun startListening(
     }
 
     try {
+        recognizer.cancel()
         recognizer.startListening(intent)
+
     } catch (e: Exception) {
-        // Recognition could not start.
+        android.util.Log.e(
+            "JARVIS",
+            "Speech recognition error",
+            e
+        )
     }
 }
