@@ -11,269 +11,80 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.*
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import com.google.firebase.Firebase
-import com.google.firebase.ai.GenerativeBackend
+import com.google.firebase.initialize
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
+import com.google.firebase.appcheck.appCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import kotlinx.coroutines.launch
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var textToSpeech: TextToSpeech? = null
 
-        window.statusBarColor =
-            android.graphics.Color.rgb(2, 8, 20)
+    private val status = mutableStateOf("JARVIS ONLINE")
+    private val conversationHistory = mutableListOf<String>()
 
-        window.navigationBarColor =
-            android.graphics.Color.rgb(2, 8, 20)
-
-        try {
-            Firebase.initialize(context = this)
-
-            Firebase.appCheck.installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-        } catch (e: Exception) {
-            android.util.Log.e(
-                "JARVIS",
-                "Firebase initialization error",
-                e
-            )
-        }
-
-        setContent {
-            JarvisScreen()
-        }
-    }
-}
-
-@Composable
-fun JarvisScreen() {
-
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    var status by remember {
-        mutableStateOf("JARVIS ONLINE")
-    }
-
-    var spokenText by remember {
-        mutableStateOf("Tap the energy core and speak")
-    }
-
-    var recognizer by remember {
-        mutableStateOf<SpeechRecognizer?>(null)
-    }
-
-    var tts by remember {
-        mutableStateOf<TextToSpeech?>(null)
-    }
-
-    var isThinking by remember {
-        mutableStateOf(false)
-    }
-
-    val conversation = remember {
-        mutableStateListOf<String>()
-    }
-
-    val cyan = Color(0xFF00E5FF)
-
-    // Gemini model
-    val model = remember {
+    private val model by lazy {
         Firebase.ai(
             backend = GenerativeBackend.googleAI()
         ).generativeModel("gemini-3.8-flash")
     }
 
-    // Orb pulse animation
-    val pulse = rememberInfiniteTransition(
-        label = "pulse"
-    ).animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "orbPulse"
-    )
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-    // Orb rotation animation
-    val rotation = rememberInfiniteTransition(
-        label = "rotation"
-    ).animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                7000,
-                easing = LinearEasing
-            )
-        ),
-        label = "orbRotation"
-    )
+        // Firebase initialization
+        Firebase.initialize(context = this)
 
-    // Speak AI response
-    fun speakReply(reply: String) {
-
-        val tamil = reply.any {
-            it in '\u0B80'..'\u0BFF'
-        }
-
-        val language = if (tamil) {
-            Locale("ta", "IN")
-        } else {
-            Locale("en", "IN")
-        }
-
-        tts?.setLanguage(language)
-        tts?.setSpeechRate(0.92f)
-        tts?.setPitch(1.0f)
-
-        tts?.speak(
-            reply,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "JARVIS_AI_REPLY"
+        // App Check debug provider for development
+        Firebase.appCheck.installAppCheckProviderFactory(
+            DebugAppCheckProviderFactory.getInstance()
         )
 
-        status = "SPEAKING..."
-    }
-
-    // Send question to Gemini
-    fun askJarvis(question: String) {
-
-        if (isThinking) return
-
-        isThinking = true
-        status = "THINKING..."
-        spokenText = question
-
-        scope.launch {
-
-            try {
-
-                val previousConversation =
-                    conversation.takeLast(10)
-                        .joinToString("\n")
-
-                val prompt = """
-                    You are JARVIS, a helpful personal AI assistant.
-
-                    Your job:
-                    - Answer questions clearly and accurately.
-                    - Support Tamil, Tanglish and English.
-                    - Reply in the same language style as the user.
-                    - Explain science, technology, coding and general knowledge simply.
-                    - Give step-by-step explanations when useful.
-                    - Remember the recent conversation included below.
-                    - Never invent facts.
-                    - If you are uncertain, say so.
-                    - Do not claim to have performed an action you did not perform.
-                    - Keep spoken replies reasonably concise.
-
-                    Recent conversation:
-                    $previousConversation
-
-                    User question:
-                    $question
-
-                    JARVIS answer:
-                """.trimIndent()
-
-                val response = model.generateContent(prompt)
-
-                val answer = response.text?.trim()
-
-                if (!answer.isNullOrBlank()) {
-
-                    conversation.add("User: $question")
-                    conversation.add("JARVIS: $answer")
-
-                    if (conversation.size > 20) {
-                        conversation.removeRange(
-                            0,
-                            conversation.size - 20
-                        )
-                    }
-
-                    spokenText = answer
-                    speakReply(answer)
-
-                } else {
-
-                    spokenText =
-                        "I could not get a response. Please try again."
-
-                    status = "NO AI RESPONSE"
-                }
-
-            } catch (e: Exception) {
-
-                android.util.Log.e(
-                    "JARVIS",
-                    "Gemini request failed",
-                    e
-                )
-
-                spokenText =
-                    "AI connection failed. Please check internet and Firebase setup."
-
-                status = "AI CONNECTION ERROR"
-
-                speakReply(
-                    "இப்போது AI இணைப்பில் சிக்கல் உள்ளது. இணையம் மற்றும் Firebase அமைப்பைச் சரிபார்க்கவும்."
-                )
-
-            } finally {
-
-                isThinking = false
+        // Text to Speech
+        textToSpeech = TextToSpeech(this) { result ->
+            if (result == TextToSpeech.SUCCESS) {
+                textToSpeech?.setSpeechRate(0.92f)
             }
         }
-    }
 
-    DisposableEffect(Unit) {
+        // Speech recognition
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            speechRecognizer =
+                SpeechRecognizer.createSpeechRecognizer(this)
 
-        if (SpeechRecognizer.isRecognitionAvailable(context)) {
-
-            recognizer =
-                SpeechRecognizer.createSpeechRecognizer(context)
-
-            recognizer?.setRecognitionListener(
+            speechRecognizer?.setRecognitionListener(
                 object : RecognitionListener {
 
                     override fun onReadyForSpeech(params: Bundle?) {
-                        status = "LISTENING..."
+                        status.value = "LISTENING..."
                     }
 
                     override fun onBeginningOfSpeech() {
-                        status = "HEARING YOU"
+                        status.value = "HEARING YOU..."
                     }
 
                     override fun onRmsChanged(rmsdB: Float) {}
@@ -281,39 +92,23 @@ fun JarvisScreen() {
                     override fun onBufferReceived(buffer: ByteArray?) {}
 
                     override fun onEndOfSpeech() {
-                        status = "THINKING..."
+                        status.value = "THINKING..."
                     }
 
                     override fun onError(error: Int) {
-
-                        status = when (error) {
-                            SpeechRecognizer.ERROR_NO_MATCH ->
-                                "VOICE NOT CLEAR"
-
-                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                                "NO SPEECH DETECTED"
-
-                            SpeechRecognizer.ERROR_NETWORK ->
-                                "NETWORK ERROR"
-
-                            else ->
-                                "VOICE ERROR: $error"
-                        }
+                        status.value = "TAP TO TRY AGAIN"
                     }
 
                     override fun onResults(results: Bundle?) {
-
-                        val matches =
+                        val spokenText =
                             results?.getStringArrayList(
                                 SpeechRecognizer.RESULTS_RECOGNITION
-                            )
+                            )?.firstOrNull()
 
-                        val result = matches?.firstOrNull()
-
-                        if (!result.isNullOrBlank()) {
-                            askJarvis(result)
+                        if (!spokenText.isNullOrBlank()) {
+                            askJarvis(spokenText)
                         } else {
-                            status = "NO VOICE DETECTED"
+                            status.value = "TAP TO TRY AGAIN"
                         }
                     }
 
@@ -327,296 +122,313 @@ fun JarvisScreen() {
                     ) {}
                 }
             )
-
-        } else {
-            status = "SPEECH RECOGNITION NOT AVAILABLE"
         }
 
-        tts = TextToSpeech(context) { result ->
-
-            if (result == TextToSpeech.SUCCESS) {
-
-                val tamilResult = tts?.setLanguage(
-                    Locale("ta", "IN")
+        setContent {
+            MaterialTheme {
+                JarvisScreen(
+                    status = status.value,
+                    onListen = { startListening() }
                 )
-
-                if (
-                    tamilResult == TextToSpeech.LANG_MISSING_DATA ||
-                    tamilResult == TextToSpeech.LANG_NOT_SUPPORTED
-                ) {
-                    tts?.setLanguage(
-                        Locale("en", "IN")
-                    )
-                }
-
-                tts?.setSpeechRate(0.92f)
-                tts?.setPitch(1.0f)
             }
-        }
-
-        onDispose {
-
-            recognizer?.destroy()
-            recognizer = null
-
-            tts?.stop()
-            tts?.shutdown()
-            tts = null
         }
     }
 
-    val permissionLauncher =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-
-            if (granted) {
-                startListening(recognizer)
-            } else {
-                status = "MICROPHONE PERMISSION DENIED"
-            }
+    private fun startListening() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            status.value = "SPEECH NOT AVAILABLE"
+            return
         }
 
-    fun onOrbTap() {
-
-        if (isThinking) return
-
-        val granted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (granted) {
-            startListening(recognizer)
-        } else {
-            permissionLauncher.launch(
+        if (
+            ActivityCompat.checkSelfPermission(
+                this,
                 Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                101
+            )
+            return
+        }
+
+        try {
+            val intent = Intent(
+                RecognizerIntent.ACTION_RECOGNIZE_SPEECH
+            ).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(
+                    RecognizerIntent.EXTRA_PARTIAL_RESULTS,
+                    false
+                )
+                putExtra(
+                    RecognizerIntent.EXTRA_MAX_RESULTS,
+                    1
+                )
+            }
+
+            status.value = "LISTENING..."
+            speechRecognizer?.startListening(intent)
+
+        } catch (e: Exception) {
+            status.value = "MICROPHONE ERROR"
+        }
+    }
+
+    private fun askJarvis(question: String) {
+        status.value = "THINKING..."
+
+        lifecycleScope.launch {
+            try {
+                val history = conversationHistory
+                    .takeLast(8)
+                    .joinToString("\n")
+
+                val prompt = """
+                    You are JARVIS, a helpful personal AI assistant.
+
+                    Rules:
+                    1. Understand Tamil, Tanglish and English.
+                    2. Reply in the same language as the user.
+                    3. Explain answers clearly and simply.
+                    4. For coding questions, give correct step-by-step guidance.
+                    5. Never invent facts. Say when you are unsure.
+                    6. Keep spoken answers reasonably concise.
+
+                    Previous conversation:
+                    $history
+
+                    User: $question
+
+                    JARVIS:
+                """.trimIndent()
+
+                val response = model.generateContent(prompt)
+                val answer = response.text
+                    ?: "Sorry, I could not generate an answer."
+
+                conversationHistory.add("User: $question")
+                conversationHistory.add("JARVIS: $answer")
+
+                speakAnswer(answer)
+
+            } catch (e: Exception) {
+                status.value = "AI CONNECTION ERROR"
+                speakAnswer(
+                    "Sorry, I could not connect to the AI service. Please try again."
+                )
+            }
+        }
+    }
+
+    private fun speakAnswer(answer: String) {
+        status.value = "SPEAKING..."
+
+        val language = if (
+            answer.any { it in '\u0B80'..'\u0BFF' }
+        ) {
+            Locale("ta", "IN")
+        } else {
+            Locale.US
+        }
+
+        textToSpeech?.let { tts ->
+            val languageResult = tts.setLanguage(language)
+
+            if (
+                languageResult == TextToSpeech.LANG_MISSING_DATA ||
+                languageResult == TextToSpeech.LANG_NOT_SUPPORTED
+            ) {
+                tts.setLanguage(Locale.US)
+            }
+
+            tts.speak(
+                answer,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "JARVIS_REPLY"
             )
         }
+
+        status.value = "JARVIS ONLINE"
     }
 
-    // Iron Man interface
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(
+            requestCode,
+            permissions,
+            grantResults
+        )
+
+        if (
+            requestCode == 101 &&
+            grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        ) {
+            startListening()
+        } else if (requestCode == 101) {
+            status.value = "MICROPHONE PERMISSION NEEDED"
+        }
+    }
+
+    override fun onDestroy() {
+        speechRecognizer?.destroy()
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        super.onDestroy()
+    }
+}
+
+@Composable
+fun JarvisScreen(
+    status: String,
+    onListen: () -> Unit
+) {
+    val infiniteTransition =
+        rememberInfiniteTransition(label = "jarvis_animation")
+
+    val pulse by infiniteTransition.animateFloat(
+        initialValue = 0.88f,
+        targetValue = 1.08f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(
+                durationMillis = 1400
+            ),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(
+                durationMillis = 8000
+            )
+        ),
+        label = "rotation"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color(0xFF06182B),
-                        Color(0xFF020814),
-                        Color.Black
-                    )
-                )
-            ),
+            .background(Color(0xFF020914)),
         contentAlignment = Alignment.Center
     ) {
-
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
 
             Text(
-                "STARK INDUSTRIES",
-                color = cyan.copy(alpha = 0.7f),
-                fontSize = 12.sp,
-                letterSpacing = 5.sp
+                text = "STARK INDUSTRIES",
+                color = Color(0xFF42C8FF),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 4.sp
             )
 
-            Spacer(
-                modifier = Modifier.height(30.dp)
-            )
-
-            Canvas(
-                modifier = Modifier
-                    .size(290.dp)
-                    .clickable {
-                        onOrbTap()
-                    }
-            ) {
-
-                val centerPoint = center
-
-                val radius =
-                    size.minDimension * 0.29f * pulse.value
-
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            cyan.copy(alpha = 0.35f),
-                            Color(0xFF0066FF).copy(alpha = 0.15f),
-                            Color.Transparent
-                        ),
-                        center = centerPoint,
-                        radius = radius * 2.2f
-                    ),
-                    radius = radius * 2.2f,
-                    center = centerPoint
-                )
-
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.White,
-                            cyan,
-                            Color(0xFF0066FF),
-                            Color(0xFF00152B)
-                        ),
-                        center = centerPoint,
-                        radius = radius
-                    ),
-                    radius = radius,
-                    center = centerPoint
-                )
-
-                drawCircle(
-                    color = cyan,
-                    radius = radius * 1.12f,
-                    center = centerPoint,
-                    style = Stroke(
-                        width = 3.dp.toPx()
-                    )
-                )
-
-                rotate(
-                    rotation.value,
-                    pivot = centerPoint
-                ) {
-
-                    drawArc(
-                        color = Color.White,
-                        startAngle = 20f,
-                        sweepAngle = 95f,
-                        useCenter = false,
-                        topLeft = Offset(
-                            centerPoint.x - radius * 1.35f,
-                            centerPoint.y - radius * 1.35f
-                        ),
-                        size = androidx.compose.ui.geometry.Size(
-                            radius * 2.7f,
-                            radius * 2.7f
-                        ),
-                        style = Stroke(
-                            width = 4.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-                    )
-
-                    drawArc(
-                        color = cyan,
-                        startAngle = 190f,
-                        sweepAngle = 110f,
-                        useCenter = false,
-                        topLeft = Offset(
-                            centerPoint.x - radius * 1.5f,
-                            centerPoint.y - radius * 1.5f
-                        ),
-                        size = androidx.compose.ui.geometry.Size(
-                            radius * 3f,
-                            radius * 3f
-                        ),
-                        style = Stroke(
-                            width = 2.dp.toPx()
-                        )
-                    )
-                }
-
-                drawCircle(
-                    color = Color.White,
-                    radius = radius * 0.09f,
-                    center = centerPoint
-                )
-            }
-
-            Spacer(
-                modifier = Modifier.height(25.dp)
-            )
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                "J.A.R.V.I.S",
-                color = cyan,
+                text = "J.A.R.V.I.S",
+                color = Color.White,
                 fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Light,
                 letterSpacing = 6.sp
             )
 
-            Spacer(
-                modifier = Modifier.height(15.dp)
-            )
+            Spacer(modifier = Modifier.height(42.dp))
 
-            Text(
-                status,
-                color = Color(0xFF00FF9D),
-                fontSize = 14.sp,
-                letterSpacing = 2.sp
-            )
+            Canvas(
+                modifier = Modifier
+                    .size(280.dp)
+                    .clickable { onListen() }
+            ) {
+                val center = this.center
+                val baseRadius = size.minDimension * 0.29f
 
-            Spacer(
-                modifier = Modifier.height(20.dp)
-            )
-
-            Text(
-                spokenText,
-                color = Color.White,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(
-                    horizontal = 25.dp
+                // Outer glow rings
+                drawCircle(
+                    color = Color(0xFF0077FF).copy(alpha = 0.10f),
+                    radius = baseRadius * 1.65f * pulse,
+                    center = center
                 )
-            )
 
-            Spacer(
-                modifier = Modifier.height(20.dp)
-            )
+                drawCircle(
+                    color = Color(0xFF00BFFF).copy(alpha = 0.18f),
+                    radius = baseRadius * 1.35f * pulse,
+                    center = center,
+                    style = Stroke(width = 3.dp.toPx())
+                )
+
+                // Rotating ring
+                rotate(rotation, pivot = center) {
+                    drawCircle(
+                        color = Color(0xFF48D7FF),
+                        radius = baseRadius * 1.18f,
+                        center = center,
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
+
+                rotate(-rotation * 0.7f, pivot = center) {
+                    drawCircle(
+                        color = Color(0xFF168BFF),
+                        radius = baseRadius * 1.02f,
+                        center = center,
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                }
+
+                // Core
+                drawCircle(
+                    color = Color(0xFF007BFF).copy(alpha = 0.35f),
+                    radius = baseRadius * pulse,
+                    center = center
+                )
+
+                drawCircle(
+                    color = Color(0xFF28C9FF),
+                    radius = baseRadius * 0.68f,
+                    center = center
+                )
+
+                drawCircle(
+                    color = Color(0xFFEAFBFF),
+                    radius = baseRadius * 0.30f,
+                    center = center
+                )
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
 
             Text(
-                if (isThinking) {
-                    "JARVIS IS PROCESSING"
-                } else {
-                    "TAP THE ENERGY CORE TO SPEAK"
-                },
-                color = Color.White.copy(alpha = 0.55f),
+                text = status,
+                color = Color(0xFF45D5FF),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 3.sp
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "TAP THE CORE TO SPEAK",
+                color = Color.Gray,
                 fontSize = 10.sp,
                 letterSpacing = 2.sp
             )
         }
-    }
-}
-
-private fun startListening(
-    recognizer: SpeechRecognizer?
-) {
-
-    if (recognizer == null) return
-
-    val intent = Intent(
-        RecognizerIntent.ACTION_RECOGNIZE_SPEECH
-    ).apply {
-
-        putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-        )
-
-        putExtra(
-            RecognizerIntent.EXTRA_PARTIAL_RESULTS,
-            false
-        )
-
-        putExtra(
-            RecognizerIntent.EXTRA_MAX_RESULTS,
-            1
-        )
-    }
-
-    try {
-        recognizer.cancel()
-        recognizer.startListening(intent)
-
-    } catch (e: Exception) {
-        android.util.Log.e(
-            "JARVIS",
-            "Speech recognition error",
-            e
-        )
     }
 }
