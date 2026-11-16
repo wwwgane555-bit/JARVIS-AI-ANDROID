@@ -11,7 +11,6 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -22,7 +21,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -34,6 +32,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.google.firebase.Firebase
 import com.google.firebase.initialize
 import com.google.firebase.ai.ai
@@ -48,11 +47,19 @@ class MainActivity : ComponentActivity() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var textToSpeech: TextToSpeech? = null
 
-    private lateinit var microphonePermissionLauncher:
-        ActivityResultLauncher<String>
-
     private val status = mutableStateOf("JARVIS ONLINE")
     private val conversationHistory = mutableListOf<String>()
+
+    private val microphonePermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                startListening()
+            } else {
+                status.value = "MICROPHONE PERMISSION NEEDED"
+            }
+        }
 
     private val model by lazy {
         Firebase.ai(
@@ -62,17 +69,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        microphonePermissionLauncher =
-            registerForActivityResult(
-                ActivityResultContracts.RequestPermission()
-            ) { granted ->
-                if (granted) {
-                    startListening()
-                } else {
-                    status.value = "MICROPHONE PERMISSION NEEDED"
-                }
-            }
 
         Firebase.initialize(context = this)
 
@@ -206,8 +202,8 @@ class MainActivity : ComponentActivity() {
                     1. Understand Tamil, Tanglish and English.
                     2. Reply in the same language as the user.
                     3. Explain answers clearly and simply.
-                    4. For coding questions, give correct step-by-step guidance.
-                    5. Never invent facts. Say when you are unsure.
+                    4. For coding questions, give step-by-step guidance.
+                    5. Never invent facts. Say when unsure.
                     6. Keep spoken answers reasonably concise.
 
                     Previous conversation:
@@ -219,6 +215,7 @@ class MainActivity : ComponentActivity() {
                 """.trimIndent()
 
                 val response = model.generateContent(prompt)
+
                 val answer = response.text
                     ?: "Sorry, I could not generate an answer."
 
@@ -248,11 +245,11 @@ class MainActivity : ComponentActivity() {
         }
 
         textToSpeech?.let { tts ->
-            val languageResult = tts.setLanguage(language)
+            val result = tts.setLanguage(language)
 
             if (
-                languageResult == TextToSpeech.LANG_MISSING_DATA ||
-                languageResult == TextToSpeech.LANG_NOT_SUPPORTED
+                result == TextToSpeech.LANG_MISSING_DATA ||
+                result == TextToSpeech.LANG_NOT_SUPPORTED
             ) {
                 tts.setLanguage(Locale.US)
             }
@@ -264,8 +261,6 @@ class MainActivity : ComponentActivity() {
                 "JARVIS_REPLY"
             )
         }
-
-        status.value = "JARVIS ONLINE"
     }
 
     override fun onDestroy() {
@@ -288,7 +283,7 @@ fun JarvisScreen(
         initialValue = 0.88f,
         targetValue = 1.08f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400),
+            animation = tween(1400),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse"
@@ -298,7 +293,7 @@ fun JarvisScreen(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 8000)
+            animation = tween(8000)
         ),
         label = "rotation"
     )
@@ -313,7 +308,6 @@ fun JarvisScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-
             Text(
                 text = "STARK INDUSTRIES",
                 color = Color(0xFF42C8FF),
